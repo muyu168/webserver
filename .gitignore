@@ -1,0 +1,49 @@
+# 编译生成的文件
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.exe
+*.out
+
+# 编译目录
+build/
+bin/
+*.dSYM/
+
+# 依赖文件
+*.d
+
+# 预编译头文件
+*.gch
+*.pch
+
+# 调试文件
+*.log
+*.pid
+core
+
+# IDE 配置文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CMake 生成的文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.bak
+
+# 测试覆盖率文件
+*.gcda
+*.gcno
+*.gcov
+
+# 临时文件
+*.tmp
+*.bak
+*.backup
