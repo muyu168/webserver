@@ -26,7 +26,7 @@ public:
     int Wait(int timeout = -1);
 
     //获取就绪的文件描述符
-    int GetEventFd(size_t i) const {return events_[i].data.fd;};
+    int GetEventsFd(size_t i) const {return events_[i].data.fd;};
 
     //获取就绪事件的类型
     uint32_t GetEvents(size_t i) const {return events_[i].events;};
