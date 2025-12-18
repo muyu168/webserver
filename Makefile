@@ -13,7 +13,7 @@ INCLUDE_DIR = include
 TARGET = $(BIN_DIR)/webserver
 
 # 查找所有源文件
-SOURCES = $(wildcard $(SRC_DIR)/*.cpp) \$(wildcard $(SRC_DIR)/*/*.cpp)
+SOURCES = $(wildcard $(SRC_DIR)/*.cpp) $(wildcard $(SRC_DIR)/*/*.cpp)
 
 # 生成对应的目标文件列表
 OBJECTS = $(patsubst $(SRC_DIR)/%.cpp, $(BUILD_DIR)/%.o, $(SOURCES))
