@@ -23,7 +23,7 @@ public:
     bool Create();                                      //创建 socket
     bool Bind(const std::string& ip,int port);          //绑定 ip 地址和端口
     bool Listen(int backlog);                           //监听连接
-    int  Accept(struct sockaddr_in* client_addr);                        //接受连接
+    int  Accept(struct sockaddr_in* client_addr);       //接受连接
     int  Connect(const char* ip, int port);             //连接服务器
 
     int  Send(const void* data, int len);               //发送数据
