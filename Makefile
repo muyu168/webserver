@@ -49,11 +49,22 @@ debug: clean all
 # 显示帮助信息
 help:
 	@echo "可用的 make 目标："
-	@echo "  make- 编译项目"
-	@echo "  make clean    - 清理编译文件"
-	@echo "  make run      - 编译并运行"
-	@echo "  make debug    - 调试模式编译"
-	@echo "  make help     - 显示此帮助信息"
+	@echo "  make			- 编译项目"
+	@echo "  make clean    	- 清理编译文件"
+	@echo "  make run      	- 编译并运行"
+	@echo "  make debug    	- 调试模式编译"
+	@echo "  make help     	- 显示此帮助信息"
 
 # 声明伪目标
 .PHONY: all clean run debug help
+
+# 日志系统编译
+$(BUILD_DIR)/base/Logger.o: $(SRC_DIR)/base/Logger.cpp $(INCLUDE_DIR)/base/Logger.h
+	@mkdir -p $(BUILD_DIR)/base
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+# 测试日志系统
+test_logger: $(BUILD_DIR)/base/Logger.o test/test_logger.cpp
+	$(CXX) $(CXXFLAGS) -g $(INCLUDES) test/test_logger.cpp $(BUILD_DIR)/base/Logger.o -o $(BIN_DIR)/test_logger -lpthread
+	@echo "日志测试编译完成: $(BIN_DIR)/test_logger"
+
