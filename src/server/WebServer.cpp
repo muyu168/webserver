@@ -9,7 +9,7 @@ bool WebServer::Start(){
     server_socket_.Create();
     server_socket_.SetNonBlocking();                                                // 设置非阻塞模式                                                         // 创建服务器套接字
     server_socket_.SetReuseAddr();                                                  // 设置 SO_REUSEADDR 选项
-    server_socket_.Bind("",port_);                                                     // 绑定端口
+    server_socket_.Bind("192.168.228.128",port_);                                                     // 绑定端口
     epoll_.Add(server_socket_.GetFd(), EPOLLIN | EPOLLET);                          // 注册服务器套接字到 epoll
     running_ = true;                                                                // 服务器运行状态
     server_socket_.Listen(128);                                                     // 监听端口
