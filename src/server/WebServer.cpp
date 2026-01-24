@@ -9,7 +9,7 @@ bool WebServer::Start(){
     server_socket_.Create();
     server_socket_.SetNonBlocking();                                                // 设置非阻塞模式                                                         // 创建服务器套接字
     server_socket_.SetReuseAddr();                                                  // 设置 SO_REUSEADDR 选项
-    server_socket_.Bind("192.168.228.128",port_);                                                     // 绑定端口
+    server_socket_.Bind("",port_);                                                     // 绑定端口
     epoll_.Add(server_socket_.GetFd(), EPOLLIN | EPOLLET);                          // 注册服务器套接字到 epoll
     running_ = true;                                                                // 服务器运行状态
     server_socket_.Listen(128);                                                     // 监听端口
@@ -60,51 +60,83 @@ void WebServer::HandleNewConnection(){
 // 处理客户端请求   
 void WebServer::HandleClientRequest(int client_fd){
     char buf[4096];
-    int n = recv(client_fd, buf, sizeof(buf), 0);
-    if(n > 0){
-        client_buffer_[client_fd] += std::string(buf,n);
-        if(client_buffer_[client_fd].size() > 4096){
-            // 请求过大，关闭连接
-            std::cout << "请求过大，关闭连接" << std::endl;
-            epoll_.Delete(client_fd);
-            close(client_fd);
-            client_buffer_.erase(client_fd);
-            return;
-        }
-        // 解析请求
-        HttpRequest request;
-        if(HttpRequest::IsComplete(client_buffer_[client_fd])){
-            // 请求完整，处理请求
-            if(request.Parse(client_buffer_[client_fd])){
-                // 处理HTTP请求
-                ProcessHttpRequest(client_fd, request);
-            }else{
-                // 解析请求失败，关闭连接
-                std::cout << "解析请求失败，关闭连接" << std::endl;
+    while(true){
+        int n = recv(client_fd, buf, sizeof(buf), 0);
+        if(n > 0){
+            client_buffer_[client_fd] += std::string(buf,n);
+            if(client_buffer_[client_fd].size() > 4096){
+                // 请求过大，关闭连接
+                std::cout << "请求过大，关闭连接" << std::endl;
                 epoll_.Delete(client_fd);
                 close(client_fd);
+                client_buffer_.erase(client_fd);
+                return;
             }
-        }else{
-            // 请求不完整
-            std::cout << "请求不完整" << std::endl;
+            // 解析请求
+            HttpRequest request;
+            if(HttpRequest::IsComplete(client_buffer_[client_fd])){
+                // 请求完整，处理请求
+                if(request.Parse(client_buffer_[client_fd])){
+                    // 处理HTTP请求
+                    ProcessHttpRequest(client_fd, request);
+                }else{
+                    // 解析请求失败，关闭连接
+                    std::cout << "解析请求失败，关闭连接" << std::endl;
+                    epoll_.Delete(client_fd);
+                    close(client_fd);
+                }
+            }else{
+                // 请求不完整
+                std::cout << "请求不完整" << std::endl;
+                epoll_.Delete(client_fd);
+                close(client_fd);
+                client_buffer_.erase(client_fd);
+                return;
+            }
+        }else if(n == 0){
+            //对端关闭连接
+            std::cout << "客户端关闭连接" << std::endl;
             epoll_.Delete(client_fd);
             close(client_fd);
             client_buffer_.erase(client_fd);
             return;
+        }else {
+            //读取出错
+            if(errno == EAGAIN || errno == EWOULDBLOCK){
+                //数据读完了，等待下一次事件
+                break;
+            }else {
+                std::cout << "recv错误:" << strerror(errno) << std::endl;
+                epoll_.Delete(client_fd);
+                close(client_fd);
+                client_buffer_.erase(client_fd);
+                return;
+            }
+
         }
-        
     }
 }     
 
 // 处理HTTP请求
 void WebServer::ProcessHttpRequest(int client_fd, const HttpRequest& request){
-     HttpResponse response = HandleRequest(request);
-            // 发送响应
-            std::string response_str = response.GetResponse();
-            send(client_fd, response_str.c_str(), response_str.size(), 0);
-            client_buffer_.erase(client_fd);
-            epoll_.Delete(client_fd);
-            close(client_fd);
+    HttpResponse response = HandleRequest(request);
+    // 发送响应
+    std::string response_str = response.GetResponse();
+    size_t send_len = 0;
+    size_t to_send = response_str.size();
+    while(to_send > send_len){
+        ssize_t len = send(client_fd, response_str.c_str() + send_len, to_send - send_len, 0);
+        if(len < 0){
+            if(errno == EAGAIN || errno == EWOULDBLOCK){
+                
+            }else {
+                std::cout << "send错误:" << strerror(errno) << std::endl;
+            }
+            break;
+        }
+        send_len += len;
+    }
+
 }
 
 // 返回响应
