@@ -1,6 +1,7 @@
 #ifndef WEBSERVER_H
 #define WEBSERVER_H
 
+#include "base/Logger.h"
 #include "socket/Socket.h"
 #include "epoll/Epoll.h"
 #include "http/HttpRequest.h"
@@ -17,6 +18,7 @@ public:
     void Stop();                                                                // 停止服务器
 
 private:
+    void ColseConnection(int client_fd);
     void HandleNewConnection();                                                 // 处理新连接请求   
     void HandleClientRequest(int client_fd);                                    // 处理客户端请求   
     void ProcessHttpRequest(int client_fd, const HttpRequest& request);     // 处理HTTP请求

@@ -49,7 +49,7 @@ int Socket::Accept(struct sockaddr_in* client_addr){
     socklen_t len = sizeof(*client_addr);
     int client_sockfd = accept(sockfd_,(struct sockaddr*) client_addr,&len);
     if(client_sockfd == -1){
-        std::cerr << "accept socket failed" << std::endl;
+        //std::cerr << "accept socket failed" << std::endl;
         return -1;
     }
     return client_sockfd;

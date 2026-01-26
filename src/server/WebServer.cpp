@@ -5,7 +5,8 @@
 #define INET_ADDRSTRLEN 16
 // 启动服务器 
 bool WebServer::Start(){
-    std::cout << "WebServer 启动" << std::endl;
+    Logger::Instance().Init("./logs/webserver.log", LogLevel::INFO);
+    LOG_INFO("WebServer 启动");
     server_socket_.Create();
     server_socket_.SetNonBlocking();                                                // 设置非阻塞模式                                                         // 创建服务器套接字
     server_socket_.SetReuseAddr();                                                  // 设置 SO_REUSEADDR 选项
@@ -13,7 +14,7 @@ bool WebServer::Start(){
     epoll_.Add(server_socket_.GetFd(), EPOLLIN | EPOLLET);                          // 注册服务器套接字到 epoll
     running_ = true;                                                                // 服务器运行状态
     server_socket_.Listen(128);                                                     // 监听端口
-    std::cout << "WebServer 启动成功" << std::endl;
+    LOG_INFO("WebServer 启动成功");
     Run();
     return true;
 }
@@ -40,21 +41,31 @@ void WebServer::Stop(){
     running_ = false;
     epoll_.Delete(server_socket_.GetFd());
     server_socket_.Close();
-    std::cout << "WebServer 停止" << std::endl;
+    LOG_INFO("WebServer 停止");
 }
 
 // 处理新连接请求   
 void WebServer::HandleNewConnection(){
-    struct sockaddr_in client_addr;
-    int client_fd_ = server_socket_.Accept(&client_addr);
-    if(client_fd_ < 0){
-        std::cout << "Accept 失败" << std::endl;
-        return;
-    }
-    epoll_.Add(client_fd_, EPOLLIN | EPOLLET);
-    char ip_str[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
-    std::cout << "新连接来自 " << ip_str << "端口:" << ntohs(client_addr.sin_port) << std::endl;
+    while(true){
+        struct sockaddr_in client_addr;
+        int client_fd_ = server_socket_.Accept(&client_addr);
+        if(client_fd_ > 0){
+            epoll_.Add(client_fd_, EPOLLIN | EPOLLET);
+            char ip_str[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
+            LOG_INFO("新连接来自%s , 端口：%d",ip_str,ntohs(client_addr.sin_port));
+        }else {
+            if(errno == EAGAIN || errno == EWOULDBLOCK){
+                break;
+            }
+            if(client_fd_ < 0){
+            LOG_ERROR("Accept 失败");
+            return;
+            }
+        }
+
+    }  
+    
 }
 
 // 处理客户端请求   
@@ -66,10 +77,8 @@ void WebServer::HandleClientRequest(int client_fd){
             client_buffer_[client_fd] += std::string(buf,n);
             if(client_buffer_[client_fd].size() > 4096){
                 // 请求过大，关闭连接
-                std::cout << "请求过大，关闭连接" << std::endl;
-                epoll_.Delete(client_fd);
-                close(client_fd);
-                client_buffer_.erase(client_fd);
+                LOG_ERROR("%d请求过大，关闭连接", client_fd);
+                ColseConnection(client_fd);
                 return;
             }
             // 解析请求
@@ -79,26 +88,22 @@ void WebServer::HandleClientRequest(int client_fd){
                 if(request.Parse(client_buffer_[client_fd])){
                     // 处理HTTP请求
                     ProcessHttpRequest(client_fd, request);
+                    client_buffer_[client_fd].clear();
                 }else{
                     // 解析请求失败，关闭连接
-                    std::cout << "解析请求失败，关闭连接" << std::endl;
-                    epoll_.Delete(client_fd);
-                    close(client_fd);
+                    LOG_ERROR("解析请求失败，关闭连接");
+                    ColseConnection(client_fd);
                 }
             }else{
                 // 请求不完整
-                std::cout << "请求不完整" << std::endl;
-                epoll_.Delete(client_fd);
-                close(client_fd);
-                client_buffer_.erase(client_fd);
+                LOG_INFO("请求不完整");
+                ColseConnection(client_fd);
                 return;
             }
         }else if(n == 0){
             //对端关闭连接
-            std::cout << "客户端关闭连接" << std::endl;
-            epoll_.Delete(client_fd);
-            close(client_fd);
-            client_buffer_.erase(client_fd);
+            LOG_INFO("客户端关闭连接");
+            ColseConnection(client_fd);
             return;
         }else {
             //读取出错
@@ -106,10 +111,8 @@ void WebServer::HandleClientRequest(int client_fd){
                 //数据读完了，等待下一次事件
                 break;
             }else {
-                std::cout << "recv错误:" << strerror(errno) << std::endl;
-                epoll_.Delete(client_fd);
-                close(client_fd);
-                client_buffer_.erase(client_fd);
+                LOG_ERROR("recv错误:%s",strerror(errno));
+                ColseConnection(client_fd);
                 return;
             }
 
@@ -130,7 +133,7 @@ void WebServer::ProcessHttpRequest(int client_fd, const HttpRequest& request){
             if(errno == EAGAIN || errno == EWOULDBLOCK){
                 
             }else {
-                std::cout << "send错误:" << strerror(errno) << std::endl;
+                LOG_ERROR("send错误:%s", strerror(errno));
             }
             break;
         }
@@ -148,3 +151,10 @@ HttpResponse WebServer::HandleRequest(const HttpRequest& request){
     response.SetBody("<html><body><h1>Hello, World!</h1></body></html>");
     return response;
 }                   
+
+//关闭连接
+void WebServer::ColseConnection(int client_fd){
+        epoll_.Delete(client_fd);
+        close(client_fd);
+        client_buffer_.erase(client_fd);
+}

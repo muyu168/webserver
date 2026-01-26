@@ -43,7 +43,7 @@ run: $(TARGET)
 	./$(TARGET)
 
 # 调试模式编译
-debug: CXXFLAGS += -DDEBUG -g
+debug: CXXFLAGS += -DDEBUG_MODE -g
 debug: clean all
 
 # 显示帮助信息
