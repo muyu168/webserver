@@ -5,17 +5,37 @@
 #define INET_ADDRSTRLEN 16
 // 启动服务器 
 bool WebServer::Start(){
+    event_fd_ = eventfd(0, EFD_NONBLOCK); 
+    epoll_.Add(event_fd_, EPOLLIN | EPOLLET); 
+    pid_t pid = fork();
+    if(pid == 0){    
+    sleep(1);
+    eventfd_write(event_fd_, 1);
+    }else{
     Logger::Instance().Init("./logs/webserver.log", LogLevel::INFO);
     LOG_INFO("WebServer 启动");
     server_socket_.Create();
     server_socket_.SetNonBlocking();                                                // 设置非阻塞模式                                                         // 创建服务器套接字
     server_socket_.SetReuseAddr();                                                  // 设置 SO_REUSEADDR 选项
-    server_socket_.Bind("",port_);                                                     // 绑定端口
+    server_socket_.Bind("",port_);                                                      // 绑定端口
     epoll_.Add(server_socket_.GetFd(), EPOLLIN | EPOLLET);                          // 注册服务器套接字到 epoll
     running_ = true;                                                                // 服务器运行状态
     server_socket_.Listen(128);                                                     // 监听端口
     LOG_INFO("WebServer 启动成功");
     Run();
+    }
+    return true;
+}
+
+//设置非阻塞模式
+bool WebServer::SetNoBlocking(int fd){
+    //获取当前flags
+    int flags = fcntl(fd, F_GETFL, 0);
+    //设置非阻塞
+    flags |= O_NONBLOCK;
+    if(fcntl(fd, F_SETFL, flags) == -1){
+        return false;
+    }
     return true;
 }
 
@@ -28,6 +48,8 @@ void WebServer::Run(){
             if(client_fd == server_socket_.GetFd()){
                 // 处理新连接请求
                 HandleNewConnection();
+            }else if(client_fd == event_fd_){
+                LOG_INFO("收到通知事件");
             }else{
                 // 处理客户端请求
                 HandleClientRequest(client_fd);
@@ -50,6 +72,7 @@ void WebServer::HandleNewConnection(){
         struct sockaddr_in client_addr;
         int client_fd_ = server_socket_.Accept(&client_addr);
         if(client_fd_ > 0){
+            SetNoBlocking(client_fd_);
             epoll_.Add(client_fd_, EPOLLIN | EPOLLET);
             char ip_str[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, INET_ADDRSTRLEN);

@@ -85,7 +85,7 @@ private:
     
     //双缓冲
     std::unique_ptr<LogBuffer> current_buffer_;
-    std::unique_ptr<LogBuffer> next_buffer_;
+    std::unique_ptr<LogBuffer> next_buffer_;  
     std::vector<std::unique_ptr<LogBuffer>> buffers_to_write_;     //待写入的缓冲区
 
     //线程同步

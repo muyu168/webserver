@@ -2,6 +2,7 @@
 #include <iostream>
 
 void LogBuffer::Append(const char* data, size_t len){
+    //判断剩余长度
     if(len > Avail()){
         len = Avail();
     }
@@ -134,7 +135,7 @@ void Logger::BackgroundThread(){
 
 //格式化日志
 void Logger::FormatLog(LogBuffer buffer,LogLevel level,const char* file, int line, const char* fmt, va_list args){
-    
+       
 }
 
 //获取当前时间字符串

@@ -8,6 +8,7 @@
 #include "http/HttpResponse.h"
 #include <string>
 #include <map>
+#include <sys/eventfd.h>
 
 class WebServer {
 public:
@@ -17,7 +18,9 @@ public:
     void Run();                                                                 // 运行事件循环
     void Stop();                                                                // 停止服务器
 
+
 private:
+    bool SetNoBlocking(int fd);                                                // 设置非阻塞模式
     void ColseConnection(int client_fd);
     void HandleNewConnection();                                                 // 处理新连接请求   
     void HandleClientRequest(int client_fd);                                    // 处理客户端请求   
@@ -25,6 +28,7 @@ private:
     HttpResponse HandleRequest(const HttpRequest& request);                     // 返回响应
 
 private:
+    int event_fd_;
     int port_;                                                                  // 监听端口
     Socket server_socket_;                                                      // 服务器套接字
     Epoll epoll_;                                                                // epoll对象        
