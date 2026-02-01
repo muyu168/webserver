@@ -8,6 +8,7 @@ int main(int argc, char* argv[]){
         return 1;
     }
     int port = atoi(argv[1]);
+    Logger::Instance().Init("./logs/webserver.log", LogLevel::INFO);
     WebServer server(port);
     if(!server.Start()){
         //启动失败

@@ -1,6 +1,6 @@
 # 编译器和编译选项
 CXX = g++
-CXXFLAGS = -std=c++11 -Wall -Wextra -O2 -g
+CXXFLAGS = -std=c++11 -Wall -Wextra -O2 -g -fno-omit-frame-pointer
 INCLUDES = -I./include
 
 # 目录定义

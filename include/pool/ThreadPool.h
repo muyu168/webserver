@@ -13,7 +13,7 @@
 
 class ThreadPool {
 public:
-    explicit ThreadPool(size_t thread_num);
+    explicit ThreadPool(size_t thread_num = 4);
 
     ~ThreadPool();
    
@@ -74,7 +74,7 @@ inline ThreadPool::ThreadPool(size_t thread_num) : stop_(false){
         }
     }
 
- ThreadPool::~ThreadPool(){
+inline ThreadPool::~ThreadPool(){
         {
             //加锁保证线程安全
             std::unique_lock<std::mutex> lock(mutex_);

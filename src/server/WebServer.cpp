@@ -5,25 +5,18 @@
 #define INET_ADDRSTRLEN 16
 // 启动服务器 
 bool WebServer::Start(){
-    event_fd_ = eventfd(0, EFD_NONBLOCK); 
-    epoll_.Add(event_fd_, EPOLLIN | EPOLLET); 
-    pid_t pid = fork();
-    if(pid == 0){    
-    sleep(1);
-    eventfd_write(event_fd_, 1);
-    }else{
-    Logger::Instance().Init("./logs/webserver.log", LogLevel::INFO);
     LOG_INFO("WebServer 启动");
     server_socket_.Create();
     server_socket_.SetNonBlocking();                                                // 设置非阻塞模式                                                         // 创建服务器套接字
     server_socket_.SetReuseAddr();                                                  // 设置 SO_REUSEADDR 选项
     server_socket_.Bind("",port_);                                                      // 绑定端口
     epoll_.Add(server_socket_.GetFd(), EPOLLIN | EPOLLET);                          // 注册服务器套接字到 epoll
+    event_fd_ = eventfd(0, EFD_NONBLOCK); 
+    epoll_.Add(event_fd_, EPOLLIN | EPOLLET); 
     running_ = true;                                                                // 服务器运行状态
     server_socket_.Listen(128);                                                     // 监听端口
     LOG_INFO("WebServer 启动成功");
     Run();
-    }
     return true;
 }
 
@@ -42,14 +35,28 @@ bool WebServer::SetNoBlocking(int fd){
 // 运行事件循环
 void WebServer::Run(){
     while(running_){
-        int num_events = epoll_.Wait(-1);
+        int num_events = epoll_.Wait(10);
         for(int i = 0 ; i < num_events ; i++){
             int client_fd = epoll_.GetEventsFd(i);
             if(client_fd == server_socket_.GetFd()){
                 // 处理新连接请求
                 HandleNewConnection();
             }else if(client_fd == event_fd_){
-                LOG_INFO("收到通知事件");
+                uint64_t value;
+                eventfd_read(event_fd_, &value);
+                std::queue<PendingResponse> to_response_queue;
+                // 处理事件通知
+                {
+                    std::unique_lock<std::mutex> lock(response_mutex_);
+                    to_response_queue.swap(response_queue_);
+                }
+                // 处理响应
+                
+                while(!to_response_queue.empty()){
+                    PendingResponse response = std::move(to_response_queue.front());
+                    to_response_queue.pop();
+                    SendResponse(response.clinet_fd, response.data);
+                }
             }else{
                 // 处理客户端请求
                 HandleClientRequest(client_fd);
@@ -108,15 +115,27 @@ void WebServer::HandleClientRequest(int client_fd){
             HttpRequest request;
             if(HttpRequest::IsComplete(client_buffer_[client_fd])){
                 // 请求完整，处理请求
-                if(request.Parse(client_buffer_[client_fd])){
-                    // 处理HTTP请求
-                    ProcessHttpRequest(client_fd, request);
-                    client_buffer_[client_fd].clear();
-                }else{
-                    // 解析请求失败，关闭连接
-                    LOG_ERROR("解析请求失败，关闭连接");
-                    ColseConnection(client_fd);
-                }
+                std::string data = std::move(client_buffer_[client_fd]);
+                thread_pool_.Enqueue([this, client_fd, data = std::move(data)](){
+                    // 解析请求
+                    HttpRequest request;
+                    parseRequest(client_fd, request, data);
+                    //生成响应
+                    HttpResponse response = HandleRequest(request);
+                    PendingResponse pending_reponse{client_fd, response.GetResponse()};
+                    // 保存响应
+                    {
+                        std::lock_guard<std::mutex> lock(response_mutex_);
+                        response_queue_.emplace(std::move(pending_reponse));
+                    }
+                    // 通知主线程处理响应
+                    eventfd_write(event_fd_, 1);
+                });
+                //测试用：单线程处理请求
+                /*parseRequest(client_fd, request, data);
+                HttpResponse response = HandleRequest(request);
+                PendingResponse pending_reponse{client_fd, response.GetResponse()};
+                SendResponse(pending_reponse.clinet_fd, pending_reponse.data);*/
             }else{
                 // 请求不完整
                 LOG_INFO("请求不完整");
@@ -143,18 +162,16 @@ void WebServer::HandleClientRequest(int client_fd){
     }
 }     
 
-// 处理HTTP请求
-void WebServer::ProcessHttpRequest(int client_fd, const HttpRequest& request){
-    HttpResponse response = HandleRequest(request);
+// 返回HTTP响应
+void WebServer::SendResponse(int client_fd, const std::string& to_response){
     // 发送响应
-    std::string response_str = response.GetResponse();
     size_t send_len = 0;
-    size_t to_send = response_str.size();
+    size_t to_send = to_response.size();
     while(to_send > send_len){
-        ssize_t len = send(client_fd, response_str.c_str() + send_len, to_send - send_len, 0);
+        ssize_t len = send(client_fd, to_response.c_str() + send_len, to_send - send_len, 0);
         if(len < 0){
             if(errno == EAGAIN || errno == EWOULDBLOCK){
-                
+                break;
             }else {
                 LOG_ERROR("send错误:%s", strerror(errno));
             }
@@ -165,8 +182,21 @@ void WebServer::ProcessHttpRequest(int client_fd, const HttpRequest& request){
 
 }
 
+// 解析HTTP请求
+void WebServer::parseRequest(int client_fd, HttpRequest& request, const std::string& data){
+    if(request.Parse(data)){
+        // 处理HTTP请求            
+        }else{
+            // 解析请求失败，关闭连接
+            LOG_ERROR("解析请求失败，关闭连接");
+            ColseConnection(client_fd);
+        }
+}
+
 // 返回响应
 HttpResponse WebServer::HandleRequest(const HttpRequest& request){
+    //模拟数据库查询10毫秒
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     HttpResponse response;
     response.SetStatusCode(200);
     response.SetStatusMessage("OK");
