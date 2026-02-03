@@ -13,7 +13,7 @@
 
 class ThreadPool {
 public:
-    explicit ThreadPool(size_t thread_num = 4);
+    explicit ThreadPool(size_t thread_num = 8);
 
     ~ThreadPool();
    

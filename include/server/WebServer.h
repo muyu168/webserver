@@ -1,6 +1,7 @@
 #ifndef WEBSERVER_H
 #define WEBSERVER_H
 
+#include "timer/Timer.h"
 #include "pool/ThreadPool.h"
 #include "base/Logger.h"
 #include "socket/Socket.h"
@@ -34,7 +35,7 @@ private:
     void HandleNewConnection();                                                 // 处理新连接请求   
     void HandleClientRequest(int client_fd);                                    // 处理客户端请求   
     void parseRequest(int client_fd, HttpRequest& request, const std::string& data);               // 解析HTTP请求
-    void SendResponse(int client_fd, const std::string& to_response);           // 返回HTTP响应
+    void SendResponse(PendingResponse& to_response);                               // 返回HTTP响应
     HttpResponse HandleRequest(const HttpRequest& request);                     // 返回响应
     void ProcessPendingResponse();
 
@@ -43,7 +44,8 @@ private:
     int port_;                                                                  // 监听端口
     ThreadPool thread_pool_;
     Socket server_socket_;                                                      // 服务器套接字
-    Epoll epoll_;                                                                // epoll对象        
+    Timer timer_;                                                               // 定时器对象   
+    Epoll epoll_;                                                               // epoll对象        
     bool running_;                                                              // 运行状态
     std::mutex response_mutex_;                                                 // 响应队列互斥锁
     std::queue<PendingResponse> response_queue_;                                // 待发送响应队列
