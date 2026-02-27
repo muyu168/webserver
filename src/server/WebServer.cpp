@@ -1,13 +1,18 @@
 #include "server/WebServer.h"
+#include "base/Logger.h"
+#include "http/HttpRequestFSM.h"
 #include <chrono>
 #include <iostream>
 #include <arpa/inet.h>
+#include <sys/epoll.h>
+#include <signal.h>
 
 #define INET_ADDRSTRLEN 16
-#define TIMEOUT_MS 5000
+#define TIMEOUT_MS 60000
 // 启动服务器 
 bool WebServer::Start(){
     LOG_INFO("WebServer 启动");
+    signal(SIGPIPE, SIG_IGN);
     server_socket_.Create();
     server_socket_.SetNonBlocking();                                                // 设置非阻塞模式                                                         // 创建服务器套接字
     server_socket_.SetReuseAddr();                                                  // 设置 SO_REUSEADDR 选项
@@ -85,11 +90,11 @@ void WebServer::HandleNewConnection(){
         int client_fd_ = server_socket_.Accept(&client_addr);
         if(client_fd_ > 0){
             SetNoBlocking(client_fd_);
-            epoll_.Add(client_fd_, EPOLLIN | EPOLLET);
+            epoll_.Add(client_fd_, EPOLLIN | EPOLLET | EPOLLONESHOT);
             //为新连接添加定时器
             auto ms = std::chrono::milliseconds(TIMEOUT_MS);
             timer_.AddTimer(client_fd_, ms, [this,client_fd = client_fd_](){
-                ColseConnection(client_fd);
+                CloseConnection(client_fd);
             });
             char ip_str[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
@@ -118,51 +123,64 @@ void WebServer::HandleClientRequest(int client_fd){
             if(client_buffer_[client_fd].size() > 4096){
                 // 请求过大，关闭连接
                 LOG_ERROR("%d请求过大，关闭连接", client_fd);
-                ColseConnection(client_fd);
+                CloseConnection(client_fd);
                 return;
             }
             //收到客户端事件，调整定时器
                 auto ms = std::chrono::milliseconds(TIMEOUT_MS);
                 timer_.AdjustTimer(client_fd, ms, [this,fd = client_fd](){
-                    ColseConnection(fd);
+                    CloseConnection(fd);
                 });
             // 解析请求
-            HttpRequest request;
-            if(HttpRequest::IsComplete(client_buffer_[client_fd])){
-                // 请求完整，处理请求
-                std::string data = std::move(client_buffer_[client_fd]);
-                thread_pool_.Enqueue([this, client_fd, data = std::move(data)](){
-                    // 解析请求
-                    HttpRequest request;
-                    parseRequest(client_fd, request, data);
-                    //生成响应
-                    HttpResponse response = HandleRequest(request);
-                    PendingResponse pending_reponse{client_fd, response.GetResponse()};
-                    // 保存响应
-                    {
-                        std::lock_guard<std::mutex> lock(response_mutex_);
-                        response_queue_.emplace(std::move(pending_reponse));
-                    }
-                    // 通知主线程处理响应
-                    uint64_t value = 1;
-                    eventfd_write(event_fd_, value);
-                });
+            std::string data = std::move(client_buffer_[client_fd]);
+            thread_pool_.Enqueue([this, client_fd, data = std::move(data)]()mutable{
+                HttpRequestFSM& request = request_fsm_[client_fd];
+                while(!data.empty()){
+                    request.Parse(data);
+                    if(request.IsComplete()){
+                            // 请求完整，处理请求
+                            HttpResponse response = HandleRequest(request);
+                            PendingResponse pending_response{client_fd, response.GetResponse()};
+                            // 保存响应
+                            {
+                                std::unique_lock<std::mutex> lock(response_mutex_);
+                                response_queue_.emplace(std::move(pending_response));
+                            }
+                            request.Reset();
+                            // 通知主线程处理响应
+                            uint64_t value = 1;
+                            eventfd_write(event_fd_, value);
+                        }else if(request.IsError()){
+                            //请求出错
+                            if(request.IsError()){
+                                LOG_ERROR("%d请求出错,关闭连接", client_fd);
+                                CloseConnection(client_fd);
+                            }else {
+                                //解析缺少数据，保存请求状态机
+                                std::unique_lock<std::mutex> lock(request_mutex_);
+                                request_fsm_[client_fd] = request;
+                            }
+                        }else{
+                            //请求不完整
+                            //保存剩余数据
+                            std::unique_lock<std::mutex> lock(request_mutex_);
+                            client_buffer_[client_fd] += data;
+                            return;  
+                        }
+                }
+                epoll_.ReArm(client_fd, EPOLLIN | EPOLLET);
+            });
                 //测试用：单线程处理请求
                 /*parseRequest(client_fd, request, data);
                 HttpResponse response = HandleRequest(request);
                 PendingResponse pending_reponse{client_fd, response.GetResponse()};
                 SendResponse(pending_reponse.clinet_fd, pending_reponse.data);*/
-            }else{
-                // 请求不完整
-                LOG_INFO("请求不完整");
-                ColseConnection(client_fd);
-                return;
-            }
+
         }else if(n == 0){
             //对端关闭连接
             LOG_INFO("客户端关闭连接");
             //关闭连接
-            ColseConnection(client_fd);
+            CloseConnection(client_fd);
             return;
         }else {
             //读取出错
@@ -171,7 +189,7 @@ void WebServer::HandleClientRequest(int client_fd){
                 return;
             }else {
                 LOG_ERROR("recv错误:%s",strerror(errno));
-                ColseConnection(client_fd);
+                CloseConnection(client_fd);
                 return;
             }
 
@@ -206,12 +224,12 @@ void WebServer::parseRequest(int client_fd, HttpRequest& request, const std::str
         }else{
             // 解析请求失败，关闭连接
             LOG_ERROR("解析请求失败，关闭连接");
-            ColseConnection(client_fd);
+            CloseConnection(client_fd);
         }
 }
 
 // 返回响应
-HttpResponse WebServer::HandleRequest(const HttpRequest& request){
+HttpResponse WebServer::HandleRequest(const HttpRequestFSM& request){
     //模拟数据库查询10毫秒
     //std::this_thread::sleep_for(std::chrono::milliseconds(10));
     HttpResponse response;
@@ -223,7 +241,7 @@ HttpResponse WebServer::HandleRequest(const HttpRequest& request){
 }                   
 
 //关闭连接
-void WebServer::ColseConnection(int client_fd){
+void WebServer::CloseConnection(int client_fd){
     //删除定时器
     timer_.DelTimer(client_fd);
     //删除epoll事件

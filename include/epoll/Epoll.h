@@ -25,6 +25,9 @@ public:
     //等待事件发生(返回就绪事件的数量)
     int Wait(int timeout = -1);
 
+    //设置one shot模式
+    void ReArm(int fd, uint32_t events);
+
     //获取就绪的文件描述符
     int GetEventsFd(size_t i) const {return events_[i].data.fd;};
 

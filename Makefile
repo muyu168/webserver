@@ -68,3 +68,13 @@ test_logger: $(BUILD_DIR)/base/Logger.o test/test_logger.cpp
 	$(CXX) $(CXXFLAGS) -g $(INCLUDES) test/test_logger.cpp $(BUILD_DIR)/base/Logger.o -o $(BIN_DIR)/test_logger -lpthread
 	@echo "日志测试编译完成: $(BIN_DIR)/test_logger"
 
+# 测试解析状态机
+test_httpFSM: $(BUILD_DIR)/http/HttpRequestFSM.o test/test_http_requestFSM.cpp
+	$(CXX) $(CXXFLAGS) -g $(INCLUDES) test/test_http_requestFSM.cpp $(BUILD_DIR)/http/HttpRequestFSM.o -o $(BIN_DIR)/test_httpFSM -lpthread
+	@echo "HTTP状态机测试编译完成: $(BIN_DIR)/test_httpFSM"
+
+
+
+# 编译测试用例
+test: test_logger test_httpFSM
+

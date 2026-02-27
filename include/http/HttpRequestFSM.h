@@ -45,6 +45,8 @@ public:
     const std::string& GetBody()const{return m_body_;};
     //判断请求是否完成
     bool IsComplete()const{return m_parse_state_ == ParseState::FINISH;};
+    //判断请求是否出错
+    bool IsError()const{return m_line_state_ == LineState::LINE_BAD || m_parse_state_ == ParseState::ERROR;};
 private:
     //解析请求行
     LineState ParseRequestLine(std::string& data);

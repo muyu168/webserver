@@ -1,5 +1,6 @@
 #include "epoll/Epoll.h"
 #include <iostream>
+#include <sys/epoll.h>
 #include <unistd.h>
 
 Epoll::Epoll(int max_events) {
@@ -54,3 +55,9 @@ int Epoll::Wait(int timeout){
     return num_events;
 }
 
+void Epoll::ReArm(int fd, uint32_t events){
+    struct epoll_event ev;
+    ev.events = events | EPOLLONESHOT;
+    ev.data.fd = fd;
+    epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ev);
+}

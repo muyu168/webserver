@@ -7,6 +7,7 @@
 #include "socket/Socket.h"
 #include "epoll/Epoll.h"
 #include "http/HttpRequest.h"
+#include "http/HttpRequestFSM.h"
 #include "http/HttpResponse.h"
 #include <string>
 #include <map>
@@ -31,25 +32,28 @@ public:
 
 private:
     bool SetNoBlocking(int fd);                                                // 设置非阻塞模式
-    void ColseConnection(int client_fd);
+    void CloseConnection(int client_fd);
     void HandleNewConnection();                                                 // 处理新连接请求   
     void HandleClientRequest(int client_fd);                                    // 处理客户端请求   
     void parseRequest(int client_fd, HttpRequest& request, const std::string& data);               // 解析HTTP请求
     void SendResponse(PendingResponse& to_response);                               // 返回HTTP响应
-    HttpResponse HandleRequest(const HttpRequest& request);                     // 返回响应
+    HttpResponse HandleRequest(const HttpRequestFSM& request);                     // 返回响应
     void ProcessPendingResponse();
 
 private:
     int event_fd_;
     int port_;                                                                  // 监听端口
-    ThreadPool thread_pool_;
+    ThreadPool thread_pool_;                                                    // 线程池对象
     Socket server_socket_;                                                      // 服务器套接字
     Timer timer_;                                                               // 定时器对象   
     Epoll epoll_;                                                               // epoll对象        
     bool running_;                                                              // 运行状态
+    std::mutex request_mutex_;                                                  // 请求队列互斥锁
+    std::queue<int> request_queue_;                                              // 待处理请求队列
     std::mutex response_mutex_;                                                 // 响应队列互斥锁
     std::queue<PendingResponse> response_queue_;                                // 待发送响应队列
-    std::map<int, std::string> client_buffer_;                                  // 客户端请求缓存
+    std::unordered_map<int, std::string> client_buffer_;                        // 客户端请求缓存
+    std::unordered_map<int, HttpRequestFSM> request_fsm_;                       // 请求状态机
 };
 
 #endif
