@@ -2,6 +2,7 @@
 #define WEBSERVER_H
 
 #include "timer/Timer.h"
+#include "http/MimeType.h"
 #include "pool/ThreadPool.h"
 #include "base/Logger.h"
 #include "socket/Socket.h"
@@ -11,6 +12,7 @@
 #include "http/HttpResponse.h"
 #include <string>
 #include <map>
+#include <sys/stat.h>
 #include <sys/eventfd.h>
 #include <sys/types.h>
 #include <queue>
@@ -23,7 +25,7 @@ struct PendingResponse{
 
 class WebServer {
 public:
-    WebServer(int port) : port_(port) , running_(false){};
+    WebServer(int port, const std::string& root_path = "./www") : port_(port) , running_(false), root_path_(root_path){};
     ~WebServer() = default;
     bool Start();                                                               // 启动服务器       
     void Run();                                                                 // 运行事件循环
@@ -48,6 +50,7 @@ private:
     Timer timer_;                                                               // 定时器对象   
     Epoll epoll_;                                                               // epoll对象        
     bool running_;                                                              // 运行状态
+    std::string root_path_;
     std::mutex request_mutex_;                                                  // 请求队列互斥锁
     std::queue<int> request_queue_;                                              // 待处理请求队列
     std::mutex response_mutex_;                                                 // 响应队列互斥锁

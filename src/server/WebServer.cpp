@@ -1,9 +1,11 @@
 #include "server/WebServer.h"
 #include "base/Logger.h"
 #include "http/HttpRequestFSM.h"
+#include "http/MimeType.h"
 #include <chrono>
 #include <iostream>
 #include <arpa/inet.h>
+#include <iterator>
 #include <sys/epoll.h>
 #include <signal.h>
 
@@ -233,10 +235,39 @@ HttpResponse WebServer::HandleRequest(const HttpRequestFSM& request){
     //模拟数据库查询10毫秒
     //std::this_thread::sleep_for(std::chrono::milliseconds(10));
     HttpResponse response;
+    //获取请求url
+    std::string url = request.GetUrl();
+    //判断url是否合法
+    if(url.find("..") != std::string::npos){
+        //url不合法，返回403
+        response.SetStatusCode(403);
+        response.SetStatusMessage("Forbidden");
+        response.SetBody("403 Forbidden");
+        return response;
+    }
+    if(url == "/"){
+        //处理根目录请求
+        url = "/index.html";
+    }
+    //构建完整文件路径
+    std::string file_path = root_path_ + url;
+    //检查文件
+    struct stat file_stat;
+    if(stat(file_path.c_str(), &file_stat) != 0){
+        //文件不存在，返回404
+        response.SetStatusCode(404);
+        response.SetStatusMessage("Not Found");
+        response.SetBody("404 Not Found");
+        return response;
+    }
+    //读取文件
+    std::ifstream file(file_path, std::ios::binary);
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    //构建响应
     response.SetStatusCode(200);
     response.SetStatusMessage("OK");
-    response.AddHeader("Content-Type", "text/html");
-    response.SetBody("<html><body><h1>Hello, World!</h1></body></html>");
+    response.AddHeader("Content-Type", MimeType::GetMimeType(file_path));
+    response.SetBody(content);
     return response;
 }                   
 
