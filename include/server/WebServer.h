@@ -29,10 +29,10 @@ public:
     ~WebServer() = default;
     bool Start();                                                               // 启动服务器       
     void Run();                                                                 // 运行事件循环
-    void Stop();                                                                // 停止服务器
-
 
 private:
+    void HandleSignal(int signal_fd);                                                        // 处理信号
+    void Stop();                                                                // 停止服务器
     bool SetNoBlocking(int fd);                                                // 设置非阻塞模式
     void CloseConnection(int client_fd);
     void HandleNewConnection();                                                 // 处理新连接请求   
@@ -43,7 +43,8 @@ private:
     void ProcessPendingResponse();
 
 private:
-    int event_fd_;
+    int signal_fd_;                                                             // 信号文件描述符
+    int event_fd_;                                                              // 事件文件描述符
     int port_;                                                                  // 监听端口
     ThreadPool thread_pool_;                                                    // 线程池对象
     Socket server_socket_;                                                      // 服务器套接字

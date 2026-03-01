@@ -3,11 +3,13 @@
 #include "http/HttpRequestFSM.h"
 #include "http/MimeType.h"
 #include <chrono>
+#include <csignal>
 #include <iostream>
 #include <arpa/inet.h>
 #include <iterator>
 #include <sys/epoll.h>
 #include <signal.h>
+#include <sys/signalfd.h>
 
 #define INET_ADDRSTRLEN 16
 #define TIMEOUT_MS 60000
@@ -20,12 +22,33 @@ bool WebServer::Start(){
     server_socket_.SetReuseAddr();                                                  // 设置 SO_REUSEADDR 选项
     server_socket_.Bind("",port_);                                                      // 绑定端口
     epoll_.Add(server_socket_.GetFd(), EPOLLIN | EPOLLET);                          // 注册服务器套接字到 epoll
+    
     event_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC); 
     epoll_.Add(event_fd_, EPOLLIN | EPOLLET); 
+
+    sigset_t sigset;
+    sigemptyset(&sigset);
+    sigaddset(&sigset, SIGINT);
+    sigaddset(&sigset, SIGTERM);
+    
+    signal_fd_ = signalfd(-1, &sigset, SFD_NONBLOCK | SFD_CLOEXEC);
+    if(signal_fd_ < 0){
+        LOG_ERROR("signalfd创建失败");
+        return false;
+    }
+    LOG_INFO("signalfd 创建成功, fd=%d", signal_fd_); 
+    if(!epoll_.Add(signal_fd_, EPOLLIN | EPOLLET)){
+    LOG_ERROR("signalfd 加入 epoll 失败: %s", strerror(errno));
+    return false;
+    }
+    LOG_INFO("signalfd 已加入 epoll");
+    
+
     running_ = true;                                                                // 服务器运行状态
     server_socket_.Listen(128);                                                     // 监听端口
     LOG_INFO("WebServer 启动成功");
     Run();
+    Stop();
     return true;
 }
 
@@ -48,6 +71,7 @@ void WebServer::Run(){
         int num_events = epoll_.Wait(timeout);
         for(int i = 0 ; i < num_events ; i++){
             int client_fd = epoll_.GetEventsFd(i);
+            LOG_DEBUG("收到事件, fd=%d", client_fd);
             if(client_fd == server_socket_.GetFd()){
                 // 处理新连接请求
                 HandleNewConnection();
@@ -67,7 +91,11 @@ void WebServer::Run(){
                     to_response_queue.pop();
                     SendResponse(response);
                 }
-            }else{
+            }else if(client_fd == signal_fd_){
+                // 处理信号事件
+                LOG_INFO("检测到 signal_fd 事件");
+                HandleSignal(client_fd);
+            }else {
                 // 处理客户端请求
                 HandleClientRequest(client_fd);
             }
@@ -79,10 +107,25 @@ void WebServer::Run(){
 
 // 停止服务器
 void WebServer::Stop(){
-    running_ = false;
+    LOG_INFO("开始清理资源");
+    //关闭所有连接
+    for(auto& client_fd : client_buffer_){
+        CloseConnection(client_fd.first);
+    }
+    //清理缓存区
+    client_buffer_.clear();
+    //清理请求状态机
+    request_fsm_.clear();
+    //关闭服务器套接字
     epoll_.Delete(server_socket_.GetFd());
     server_socket_.Close();
-    LOG_INFO("WebServer 停止");
+    //关闭事件通知
+    epoll_.Delete(event_fd_);
+    close(event_fd_);
+    //关闭信号通知
+    epoll_.Delete(signal_fd_);
+    close(signal_fd_);
+    LOG_INFO("资源清理完毕,WebServer 停止");
 }
 
 // 处理新连接请求   
@@ -281,4 +324,21 @@ void WebServer::CloseConnection(int client_fd){
     close(client_fd);
     //删除缓冲区
     client_buffer_.erase(client_fd);
+}
+
+void WebServer::HandleSignal(int signal_fd){
+    //读取信号数据
+    struct signalfd_siginfo siginfo;
+    ssize_t len = read(signal_fd, &siginfo, sizeof(siginfo));
+    if(len != sizeof(siginfo)){
+        LOG_ERROR("信号读取失败");
+        return;
+    }
+
+    //处理信号
+    if(siginfo.ssi_signo == SIGINT || siginfo.ssi_signo == SIGTERM){
+        LOG_INFO("收到退出信号,准备关闭服务器");
+        running_ = false;
+        return;
+    }
 }
