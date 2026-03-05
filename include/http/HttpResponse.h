@@ -26,6 +26,9 @@ public:
     //获取完整的HTTP响应字符串
     std::string GetResponse() const;
 
+    //判断是否应该保持连接
+    bool ShouldKeepAlive() const;
+
     //调试用：打印
     void Print() const;
 

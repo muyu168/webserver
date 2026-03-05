@@ -31,7 +31,7 @@ public:
     void Reset();
 
     //判断是否需要长连接
-    bool IsKeepAlive();
+    bool IsKeepAlive() const;
 
     //获取请求方法
     const std::string& GetMethod()const{return m_method_;};
@@ -58,13 +58,12 @@ private:
 private:
     LineState m_line_state_ = LineState::LINE_OK;           //当前行解析状态
     ParseState m_parse_state_ = ParseState::REQUEST_LINE;   //当前状态
-    std::string m_method_;                                  //请求方法  
+    std::string m_method_;                                  //请求方法
     std::string m_url_;                                     //请求路径
     std::string m_version_;                                 //HTTP版本
     std::map<std::string, std::string> m_headers_;          //请求头
     std::string m_body_;                                    //请求体
-    size_t m_content_lenth_;                                //请求体长度(用于判断body是否读完)
-    bool m_keep_alive_ = false;                             //是否保持长连接
+    size_t m_content_lenth_ = 0;                            //请求体长度(用于判断body是否读完)
 };
 
 

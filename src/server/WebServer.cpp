@@ -158,86 +158,117 @@ void WebServer::HandleNewConnection(){
     
 }
 
-// 处理客户端请求   
+// 处理客户端请求
 void WebServer::HandleClientRequest(int client_fd){
     char buf[4096];
     while(true){
         int n = recv(client_fd, buf, sizeof(buf), 0);
         if(n > 0){
-            client_buffer_[client_fd] += std::string(buf,n);
-            if(client_buffer_[client_fd].size() > 4096){
-                // 请求过大，关闭连接
-                LOG_ERROR("%d请求过大，关闭连接", client_fd);
-                CloseConnection(client_fd);
-                return;
+            // 【线程安全】加锁保护 client_buffer_
+            {
+                std::unique_lock<std::mutex> lock(buffer_mutex_);
+                client_buffer_[client_fd] += std::string(buf, n);
+                if(client_buffer_[client_fd].size() > 65536){  // 提高限制到 64KB
+                    // 请求过大，关闭连接
+                    LOG_ERROR("fd=%d 请求过大(%zu bytes)，关闭连接", client_fd, client_buffer_[client_fd].size());
+                    CloseConnection(client_fd);
+                    return;
+                }
             }
-            //收到客户端事件，调整定时器
-                auto ms = std::chrono::milliseconds(TIMEOUT_MS);
-                timer_.AdjustTimer(client_fd, ms, [this,fd = client_fd](){
-                    CloseConnection(fd);
-                });
-            // 解析请求
-            std::string data = std::move(client_buffer_[client_fd]);
-            thread_pool_.Enqueue([this, client_fd, data = std::move(data)]()mutable{
-                HttpRequestFSM& request = request_fsm_[client_fd];
-                while(!data.empty()){
-                    request.Parse(data);
-                    if(request.IsComplete()){
+
+            // 收到客户端事件，调整定时器
+            auto ms = std::chrono::milliseconds(TIMEOUT_MS);
+            timer_.AdjustTimer(client_fd, ms, [this, fd = client_fd](){
+                CloseConnection(fd);
+            });
+
+        }else if(n == 0){
+            // 对端关闭连接
+            LOG_INFO("fd=%d 客户端关闭连接", client_fd);
+            CloseConnection(client_fd);
+            return;
+        }else {
+            // 读取出错
+            if(errno == EAGAIN || errno == EWOULDBLOCK){
+                // 数据读完了，提交到线程池处理
+
+                // 【线程安全】从缓冲区取出数据并清空
+                std::string data;
+                {
+                    std::unique_lock<std::mutex> lock(buffer_mutex_);
+                    data = std::move(client_buffer_[client_fd]);
+                    client_buffer_[client_fd].clear();  // 确保清空
+                }
+
+                // 提交到线程池异步处理
+                thread_pool_.Enqueue([this, client_fd, data = std::move(data)]() mutable {
+                    // 【线程安全】获取或创建请求状态机
+                    HttpRequestFSM request;
+                    {
+                        std::unique_lock<std::mutex> lock(fsm_mutex_);
+                        if(request_fsm_.find(client_fd) != request_fsm_.end()){
+                            request = request_fsm_[client_fd];
+                        }
+                    }
+
+                    // 解析请求（可能有多个请求在一个数据包中）
+                    while(!data.empty()){
+                        request.Parse(data);
+
+                        if(request.IsComplete()){
                             // 请求完整，处理请求
                             HttpResponse response = HandleRequest(request);
-                            PendingResponse pending_response{client_fd, response.GetResponse()};
-                            // 保存响应
+                            PendingResponse pending_response{
+                                client_fd,
+                                response.GetResponse(),
+                                response.ShouldKeepAlive()  // 保存 Keep-Alive 状态
+                            };
+
+                            // 保存响应到队列
                             {
                                 std::unique_lock<std::mutex> lock(response_mutex_);
                                 response_queue_.emplace(std::move(pending_response));
                             }
+
+                            // 重置状态机，准备处理下一个请求
                             request.Reset();
+
                             // 通知主线程处理响应
                             uint64_t value = 1;
                             eventfd_write(event_fd_, value);
+
                         }else if(request.IsError()){
-                            //请求出错
-                            if(request.IsError()){
-                                LOG_ERROR("%d请求出错,关闭连接", client_fd);
-                                CloseConnection(client_fd);
-                            }else {
-                                //解析缺少数据，保存请求状态机
-                                std::unique_lock<std::mutex> lock(request_mutex_);
+                            // 请求出错，关闭连接
+                            LOG_ERROR("fd=%d 请求解析出错，关闭连接", client_fd);
+                            CloseConnection(client_fd);
+                            return;
+
+                        }else{
+                            // 请求不完整，保存剩余数据和状态机
+                            {
+                                std::unique_lock<std::mutex> lock(buffer_mutex_);
+                                client_buffer_[client_fd] += data;
+                            }
+                            {
+                                std::unique_lock<std::mutex> lock(fsm_mutex_);
                                 request_fsm_[client_fd] = request;
                             }
-                        }else{
-                            //请求不完整
-                            //保存剩余数据
-                            std::unique_lock<std::mutex> lock(request_mutex_);
-                            client_buffer_[client_fd] += data;
-                            return;  
+                            break;  // 等待更多数据
                         }
-                }
-                epoll_.ReArm(client_fd, EPOLLIN | EPOLLET);
-            });
-                //测试用：单线程处理请求
-                /*parseRequest(client_fd, request, data);
-                HttpResponse response = HandleRequest(request);
-                PendingResponse pending_reponse{client_fd, response.GetResponse()};
-                SendResponse(pending_reponse.clinet_fd, pending_reponse.data);*/
+                    }
 
-        }else if(n == 0){
-            //对端关闭连接
-            LOG_INFO("客户端关闭连接");
-            //关闭连接
-            CloseConnection(client_fd);
-            return;
-        }else {
-            //读取出错
-            if(errno == EAGAIN || errno == EWOULDBLOCK){
-                //数据读完了，等待下一次事件
-                return;
+                    // 处理完成后，重新注册 epoll 事件（EPOLLONESHOT 需要重新激活）
+                    if(!epoll_.ReArm(client_fd, EPOLLIN | EPOLLET | EPOLLONESHOT)){
+                        LOG_ERROR("fd=%d ReArm 失败，  关闭连接", client_fd);
+                        CloseConnection(client_fd);
+                    }
+                });
+                return;  
             }else {
-                LOG_ERROR("recv错误:%s",strerror(errno));
+                LOG_ERROR("fd=%d recv错误: %s", client_fd, strerror(errno));
                 CloseConnection(client_fd);
                 return;
             }
-
         }
     }
 }     
@@ -248,18 +279,36 @@ void WebServer::SendResponse(PendingResponse& to_response){
     size_t send_len = 0;
     size_t to_send = to_response.data.size();
     while(to_send > send_len){
-        ssize_t len = send(to_response.clinet_fd, to_response.data.c_str() + send_len, to_send - send_len, 0);
+        ssize_t len = send(to_response.client_fd, to_response.data.c_str() + send_len, to_send - send_len, 0);
         if(len < 0){
             if(errno == EAGAIN || errno == EWOULDBLOCK){
+                // 发送缓冲区满，稍后重试
+                LOG_DEBUG("fd=%d 发送缓冲区满，已发送 %zu/%zu bytes", to_response.client_fd, send_len, to_send);
                 return;
             }else {
-                LOG_ERROR("send错误:%s", strerror(errno));
+                LOG_ERROR("fd=%d send错误: %s", to_response.client_fd, strerror(errno));
+                CloseConnection(to_response.client_fd);
                 return;
             }
         }
         send_len += len;
     }
 
+    LOG_DEBUG("fd=%d 响应发送完成，共 %zu bytes", to_response.client_fd, send_len);
+
+    // 【Keep-Alive 支持】根据响应头决定是否关闭连接
+    if(!to_response.keep_alive){
+        // 短连接模式，发送完响应后关闭连接
+        LOG_DEBUG("fd=%d 短连接模式，关闭连接", to_response.client_fd);
+        CloseConnection(to_response.client_fd);
+    }else{
+        // 长连接模式，重新注册 epoll 事件，等待下一个请求
+        LOG_DEBUG("fd=%d 长连接模式，保持连接", to_response.client_fd);
+        if(!epoll_.ReArm(to_response.client_fd, EPOLLIN | EPOLLET | EPOLLONESHOT)){
+            LOG_ERROR("fd=%d ReArm 失败，关闭连接", to_response.client_fd);
+            CloseConnection(to_response.client_fd);
+        }
+    }
 }
 
 // 解析HTTP请求
@@ -275,55 +324,218 @@ void WebServer::parseRequest(int client_fd, HttpRequest& request, const std::str
 
 // 返回响应
 HttpResponse WebServer::HandleRequest(const HttpRequestFSM& request){
-    //模拟数据库查询10毫秒
-    //std::this_thread::sleep_for(std::chrono::milliseconds(10));
     HttpResponse response;
-    //获取请求url
+
+    // 获取请求方法和 URL
+    std::string method = request.GetMethod();
     std::string url = request.GetUrl();
-    //判断url是否合法
+
+    LOG_DEBUG("处理请求: %s %s", method.c_str(), url.c_str());
+
+    // 判断 URL 是否合法（防止目录遍历攻击）
     if(url.find("..") != std::string::npos){
-        //url不合法，返回403
+        // URL 不合法，返回 403
         response.SetStatusCode(403);
         response.SetStatusMessage("Forbidden");
-        response.SetBody("403 Forbidden");
+        response.SetBody("<html><body><h1>403 Forbidden</h1><p>Access denied.</p></body></html>");
+        response.AddHeader("Content-Type", "text/html");
         return response;
     }
+
+    // 【POST 请求处理】
+    if(method == "POST"){
+        return HandlePostRequest(request);
+    }
+
+    // 【GET 请求处理】
+    if(method != "GET" && method != "HEAD"){
+        // 不支持的方法，返回 405
+        response.SetStatusCode(405);
+        response.SetStatusMessage("Method Not Allowed");
+        response.SetBody("<html><body><h1>405 Method Not Allowed</h1><p>Only GET, HEAD, and POST are supported.</p></body></html>");
+        response.AddHeader("Content-Type", "text/html");
+        response.AddHeader("Allow", "GET, HEAD, POST");
+        return response;
+    }
+
     if(url == "/"){
-        //处理根目录请求
+        // 处理根目录请求
         url = "/index.html";
     }
-    //构建完整文件路径
+
+    // 构建完整文件路径
     std::string file_path = root_path_ + url;
-    //检查文件
+
+    // 检查文件是否存在
     struct stat file_stat;
     if(stat(file_path.c_str(), &file_stat) != 0){
-        //文件不存在，返回404
+        // 文件不存在，返回 404
         response.SetStatusCode(404);
         response.SetStatusMessage("Not Found");
-        response.SetBody("404 Not Found");
+        response.SetBody("<html><body><h1>404 Not Found</h1><p>The requested resource was not found.</p></body></html>");
+        response.AddHeader("Content-Type", "text/html");
         return response;
     }
-    //读取文件
+
+    // HEAD 请求只返回头部，不返回 Body
+    if(method == "HEAD"){
+        response.SetStatusCode(200);
+        response.SetStatusMessage("OK");
+        response.AddHeader("Content-Type", MimeType::GetMimeType(file_path));
+        response.AddHeader("Content-Length", std::to_string(file_stat.st_size));
+
+        // Keep-Alive 支持
+        if(request.IsKeepAlive()){
+            response.AddHeader("Connection", "keep-alive");
+            response.AddHeader("Keep-Alive", "timeout=60, max=100");
+        }else{
+            response.AddHeader("Connection", "close");
+        }
+        return response;
+    }
+
+    // 读取文件
     std::ifstream file(file_path, std::ios::binary);
+    if(!file.is_open()){
+        // 文件无法打开，返回 500
+        response.SetStatusCode(500);
+        response.SetStatusMessage("Internal Server Error");
+        response.SetBody("<html><body><h1>500 Internal Server Error</h1><p>Failed to open file.</p></body></html>");
+        response.AddHeader("Content-Type", "text/html");
+        return response;
+    }
+
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    //构建响应
+    file.close();
+
+    // 构建成功响应
     response.SetStatusCode(200);
     response.SetStatusMessage("OK");
     response.AddHeader("Content-Type", MimeType::GetMimeType(file_path));
+
+    // 【Keep-Alive 支持】根据请求决定是否保持连接
+    if(request.IsKeepAlive()){
+        response.AddHeader("Connection", "keep-alive");
+        response.AddHeader("Keep-Alive", "timeout=60, max=100");  // 60秒超时，最多100个请求
+    }else{
+        response.AddHeader("Connection", "close");
+    }
+
     response.SetBody(content);
+    return response;
+}
+
+// 处理 POST 请求
+HttpResponse WebServer::HandlePostRequest(const HttpRequestFSM& request){
+    HttpResponse response;
+    std::string url = request.GetUrl();
+
+    LOG_DEBUG("处理 POST 请求: %s, Body 长度: %zu", url.c_str(), request.GetBody().size());
+
+    // 【示例1：表单提交接口】
+    if(url == "/api/submit"){
+        // 解析表单数据（application/x-www-form-urlencoded）
+        std::string body = request.GetBody();
+
+        // 简单的表单解析示例
+        std::map<std::string, std::string> form_data;
+        size_t pos = 0;
+        while(pos < body.size()){
+            size_t eq = body.find('=', pos);
+            size_t amp = body.find('&', pos);
+            if(eq == std::string::npos) break;
+
+            std::string key = body.substr(pos, eq - pos);
+            std::string value;
+            if(amp == std::string::npos){
+                value = body.substr(eq + 1);
+                pos = body.size();
+            }else{
+                value = body.substr(eq + 1, amp - eq - 1);
+                pos = amp + 1;
+            }
+            form_data[key] = value;
+        }
+
+        // 构建 JSON 响应
+        std::string json_response = "{\"status\":\"success\",\"message\":\"Data received\",\"data\":{";
+        bool first = true;
+        for(const auto& pair : form_data){
+            if(!first) json_response += ",";
+            json_response += "\"" + pair.first + "\":\"" + pair.second + "\"";
+            first = false;
+        }
+        json_response += "}}";
+
+        response.SetStatusCode(200);
+        response.SetStatusMessage("OK");
+        response.AddHeader("Content-Type", "application/json");
+        response.SetBody(json_response);
+
+        LOG_INFO("POST /api/submit 处理成功，返回 %zu bytes", json_response.size());
+    }
+    // 【示例2：JSON 接口】
+    else if(url == "/api/echo"){
+        // 回显接收到的数据
+        std::string body = request.GetBody();
+
+        response.SetStatusCode(200);
+        response.SetStatusMessage("OK");
+
+        // 检查 Content-Type
+        auto headers = request.GetHeaders();
+        auto ct = headers.find("Content-Type");
+        if(ct != headers.end() && ct->second.find("application/json") != std::string::npos){
+            response.AddHeader("Content-Type", "application/json");
+        }else{
+            response.AddHeader("Content-Type", "text/plain");
+        }
+
+        response.SetBody(body);
+        LOG_INFO("POST /api/echo 处理成功，回显 %zu bytes", body.size());
+    }
+    // 【默认：不支持的 POST 路径】
+    else{
+        response.SetStatusCode(404);
+        response.SetStatusMessage("Not Found");
+        response.SetBody("{\"status\":\"error\",\"message\":\"API endpoint not found\"}");
+        response.AddHeader("Content-Type", "application/json");
+        LOG_WARN("POST %s 未找到对应的处理接口", url.c_str());
+    }
+
+    // Keep-Alive 支持
+    if(request.IsKeepAlive()){
+        response.AddHeader("Connection", "keep-alive");
+        response.AddHeader("Keep-Alive", "timeout=60, max=100");
+    }else{
+        response.AddHeader("Connection", "close");
+    }
+
     return response;
 }                   
 
 //关闭连接
 void WebServer::CloseConnection(int client_fd){
-    //删除定时器
+    LOG_INFO("关闭连接 fd=%d", client_fd);
+
+    // 删除定时器
     timer_.DelTimer(client_fd);
-    //删除epoll事件
+
+    // 删除epoll事件
     epoll_.Delete(client_fd);
-    //关闭套接字
+
+    // 关闭套接字
     close(client_fd);
-    //删除缓冲区
-    client_buffer_.erase(client_fd);
+
+    // 【线程安全】清理缓冲区和状态机
+    {
+        std::unique_lock<std::mutex> lock(buffer_mutex_);
+        client_buffer_.erase(client_fd);
+    }
+    {
+        std::unique_lock<std::mutex> lock(fsm_mutex_);
+        request_fsm_.erase(client_fd);
+    }
 }
 
 void WebServer::HandleSignal(int signal_fd){

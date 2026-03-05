@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>POST 请求测试 - WebServer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+            font-family: 'Courier New', monospace;
+        }
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 25px;
+        }
+        button {
+            flex: 1;
+            padding: 14px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #555;
+        }
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+        .response {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+            display: none;
+        }
+        .response.show {
+            display: block;
+            animation: slideIn 0.3s ease;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .response h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+        .response pre {
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 POST 请求测试</h1>
+        <p class="subtitle">测试 WebServer 的 POST 请求处理能力</p>
+
+        <div class="form-group">
+            <label for="endpoint">API 端点</label>
+            <select id="endpoint" style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 6px;">
+                <option value="/api/submit">表单提交 (/api/submit)</option>
+                <option value="/api/echo">数据回显 (/api/echo)</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="username">用户名</label>
+            <input type="text" id="username" placeholder="输入用户名" value="admin">
+        </div>
+
+        <div class="form-group">
+            <label for="password">密码</label>
+            <input type="password" id="password" placeholder="输入密码" value="123456">
+        </div>
+
+        <div class="form-group">
+            <label for="message">消息内容</label>
+            <textarea id="message" placeholder="输入消息内容">Hello from WebServer!</textarea>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn-primary" onclick="sendFormData()">📤 发送表单数据</button>
+            <button class="btn-secondary" onclick="sendJSON()">📋 发送 JSON</button>
+        </div>
+
+        <div id="response" class="response">
+            <h3>服务器响应</h3>
+            <div id="status"></div>
+            <pre id="responseBody"></pre>
+        </div>
+    </div>
+
+    <script>
+        function sendFormData() {
+            const endpoint = document.getElementById('endpoint').value;
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const message = document.getElementById('message').value;
+
+            const formData = `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&message=${encodeURIComponent(message)}`;
+
+            fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: formData
+            })
+            .then(response => {
+                showResponse(response.status, response.statusText);
+                return response.text();
+            })
+            .then(data => {
+                document.getElementById('responseBody').textContent = data;
+            })
+            .catch(error => {
+                showResponse(0, 'Error');
+                document.getElementById('responseBody').textContent = 'Error: ' + error.message;
+            });
+        }
+
+        function sendJSON() {
+            const endpoint = document.getElementById('endpoint').value;
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const message = document.getElementById('message').value;
+
+            const jsonData = JSON.stringify({
+                username: username,
+                password: password,
+                message: message,
+                timestamp: new Date().toISOString()
+            });
+
+            fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: jsonData
+            })
+            .then(response => {
+                showResponse(response.status, response.statusText);
+                return response.text();
+            })
+            .then(data => {
+                try {
+                    const formatted = JSON.stringify(JSON.parse(data), null, 2);
+                    document.getElementById('responseBody').textContent = formatted;
+                } catch {
+                    document.getElementById('responseBody').textContent = data;
+                }
+            })
+            .catch(error => {
+                showResponse(0, 'Error');
+                document.getElementById('responseBody').textContent = 'Error: ' + error.message;
+            });
+        }
+
+        function showResponse(status, statusText) {
+            const responseDiv = document.getElementById('response');
+            const statusDiv = document.getElementById('status');
+
+            responseDiv.classList.add('show');
+
+            const statusClass = status >= 200 && status < 300 ? 'success' : 'error';
+            statusDiv.innerHTML = `<span class="status ${statusClass}">${status} ${statusText}</span>`;
+        }
+    </script>
+</body>
+</html>

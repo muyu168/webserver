@@ -118,7 +118,6 @@ ParseState HttpRequestFSM::Parse(std::string& data){
             }
             case ParseState::FINISH:
                 //解析完成
-                IsKeepAlive();
                 return m_parse_state_;
             }
 
@@ -128,26 +127,27 @@ ParseState HttpRequestFSM::Parse(std::string& data){
 
  //重置状态，用于长连接
 void HttpRequestFSM::Reset(){
-    m_line_state_ = LineState::LINE_OK;                                
-    m_parse_state_ = ParseState::REQUEST_LINE;                                
-    m_headers_.clear();          
-    m_body_.clear();                                  
-    m_content_lenth_ = 0;                                                     
-    m_keep_alive_ = false;
+    m_line_state_ = LineState::LINE_OK;
+    m_parse_state_ = ParseState::REQUEST_LINE;
+    m_method_.clear();
+    m_url_.clear();
+    m_version_.clear();
+    m_headers_.clear();
+    m_body_.clear();
+    m_content_lenth_ = 0;
 }
 
 //判断是否需要长连接
-bool HttpRequestFSM::IsKeepAlive(){
+bool HttpRequestFSM::IsKeepAlive() const {
     auto it = m_headers_.find("Connection");
     if(it != m_headers_.end()){
         if(it->second != "close"){
-            m_keep_alive_ = true;
+            return true;
         }else {
-            m_keep_alive_ = false;
-        }  
+            return false;
+        }
     }else {
         //HTTP/1.1 默认 keep-alive，HTTP/1.0 默认 close
-        m_keep_alive_ = (m_version_ == "HTTP/1.1");
+        return (m_version_ == "HTTP/1.1");
     }
-    return m_keep_alive_;
 }

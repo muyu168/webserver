@@ -65,3 +65,4 @@ compile_commands.json
 .cache/clangd/index/WebServer.cpp.E98D15E4B9C85571.idx
 .cache/clangd/index/WebServer.h.909037387A0CE185.idx
 .cache/clangd/index/HttpRequestFSM.h.069F33636F3FBEAE.idx
+.cache/clangd/index/MimeType.h.ADC6AB7A84DACE07.idx

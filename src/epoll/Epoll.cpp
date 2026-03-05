@@ -55,9 +55,12 @@ int Epoll::Wait(int timeout){
     return num_events;
 }
 
-void Epoll::ReArm(int fd, uint32_t events){
+bool Epoll::ReArm(int fd, uint32_t events){
     struct epoll_event ev;
     ev.events = events | EPOLLONESHOT;
     ev.data.fd = fd;
-    epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ev);
+    if(epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ev) < 0){
+        return false;
+    }
+    return true;
 }

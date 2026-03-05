@@ -29,3 +29,12 @@ std::string HttpResponse::GetResponse() const{
 void HttpResponse::Print() const{
     std::cout << "HTTP Response:\n" << GetResponse() << std::endl;
 }
+
+    //判断是否应该保持连接
+bool HttpResponse::ShouldKeepAlive() const{
+    auto it = headers_.find("Connection");
+    if(it != headers_.end()){
+        return (it->second == "keep-alive");
+    }
+    return false;  // 默认不保持连接
+}
